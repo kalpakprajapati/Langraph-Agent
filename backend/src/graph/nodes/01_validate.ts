@@ -1,9 +1,9 @@
 // first node after START node
 // user input is correct
 
-import type { State } from "../types";
+import type { TaskNode } from "../types";
 
-export async function ValidateNode(state: State): Promise<Partial<State>> {
+export const ValidateNode: TaskNode = async (state) => {
   const raw = state.input ?? "";
   const trimInput = raw.trim();
 
@@ -23,4 +23,4 @@ export async function ValidateNode(state: State): Promise<Partial<State>> {
   return {
     input: safeInput,
   };
-}
+};

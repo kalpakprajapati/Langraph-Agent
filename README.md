@@ -1,4 +1,4 @@
-﻿# LangGraph Task Agent
+# LangGraph Task Agent
 
 A TypeScript learning project that combines a Next.js UI, an Express API, and a LangGraph workflow. Enter a task, review a Gemini-generated plan, and approve or reject it. Approved plans receive a short generated note for each step.
 
@@ -10,8 +10,8 @@ The project demonstrates graph state, nodes, conditional routing, structured mod
 | --- | --- |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4, Radix/shadcn-style UI components |
 | API | Express 4, TypeScript, Zod, dotenv |
-| Workflow | `@langchain/langgraph`, `Annotation.Root`, `MemorySaver` |
-| Model | Gemini through `ChatGoogleGenerativeAI` from `@langchain/google-genai` |
+| Workflow | `@langchain/langgraph`, `StateSchema`, `MemorySaver` |
+| Model | Gemini through `ChatGoogle` from `@langchain/google/node` |
 
 LangChain handles the model calls and structured responses. LangGraph handles workflow execution, state updates, branching, and pausing for human input.
 
@@ -150,7 +150,7 @@ const config = { configurable: { thread_id: threadId } };
 const result = await graph.invoke(makeInitialState(input), config);
 ```
 
-The approval node calls the interrupt helper supplied by its node config/runtime with a serializable payload containing the steps. LangGraph saves progress and surfaces the payload under `__interrupt__`. The start helper extracts it and returns the thread ID and plan to the UI. The first HTTP request then finishes.
+The approval node calls synchronous `interrupt()` imported from `@langchain/langgraph`, with a serializable payload containing the steps. Its `responseSchema` validates the resume answer as `{ approve: boolean }`. LangGraph saves progress and surfaces the payload under `__interrupt__`. The start helper uses `graph.isInterrupted(result)` to narrow the result type and `result[INTERRUPT]` to read the metadata without an `any` cast. It returns the thread ID and plan to the UI, and the first HTTP request finishes.
 
 The UI sends a separate approval request. The backend resumes the same thread:
 
@@ -176,9 +176,9 @@ The checkpoint identifies the paused node. That node restarts from its beginning
 | `status` | `planned`, `done`, or `cancelled` |
 | `message` | Human-readable outcome |
 
-Nodes return partial updates. Fields not included in an update retain their existing values. The current annotations use replacement behavior rather than custom accumulating reducers.
+Nodes return partial updates. Fields not included in an update retain their existing values. The current schema fields use replacement behavior rather than custom accumulating reducers.
 
-The Zod `StateSchema` in `types.ts` supplies the inferred TypeScript `State` type. The graph uses `StateAnn` from `Annotation.Root`; the whole-state Zod schema is not explicitly parsed by the start helper. Request bodies and model output have their own schemas.
+`TaskState` in `types.ts` is a LangGraph `StateSchema` built from Zod fields. The same schema defines graph channels and the inferred `State`, `StateUpdate`, and `TaskNode` types. Nodes use `GraphNode<typeof TaskState>` and return partial updates. Initial input uses `TaskState.Update`; node input uses `TaskState.State`. Request bodies and model output have their own schemas.
 
 ## HTTP API
 
@@ -253,7 +253,8 @@ Type-check the backend without emitting files:
 
 ```sh
 cd backend
-npx tsc --noEmit
+npm run typecheck
+npm test
 ```
 
 Build the frontend:
@@ -263,16 +264,15 @@ cd client
 npm run build
 ```
 
-The backend's `npm test` script is currently a placeholder that exits with an error. There is no automated test suite or backend production start/build script defined in its package manifest.
+The backend tests cover approval pause/resume, rejection, invalid resume values, empty input, unknown/completed threads, and structured-output validation. Google responses are mocked, so tests require no real API key or paid calls. There is no backend production start/build script defined in its package manifest.
 
 ## Current limitations
 
 - Checkpoints use process memory. Backend restarts lose runs, and separate backend instances do not share them.
 - The UI keeps its pending thread ID in React state; reloading the page loses the reference to the pending run.
-- The API currently supports one approval pause. The resume helper assumes its next result is final; more interrupts would require extending that response handling.
+- The API supports one approval pause. The resume helper checks for pending interrupts and guards against another pause; additional approval stages would require extending the response contract.
 - The UI waits for completed API responses; it does not stream tokens or node progress.
 - Execution produces model-generated notes. It has no tool execution, external task actions, or chat-history loop.
-- The note count is requested in the prompt but not enforced to equal the step count by the schema. Pairing uses the shorter array, so a result can contain fewer notes than steps.
 - Authentication and per-user authorization of thread IDs are not implemented.
 
 ## Learning references
@@ -280,6 +280,10 @@ The backend's `npm test` script is currently a placeholder that exits with an er
 - [LangGraph Graph API](https://docs.langchain.com/oss/javascript/langgraph/graph-api)
 - [LangGraph interrupts](https://docs.langchain.com/oss/javascript/langgraph/interrupts)
 - [LangGraph persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence)
-- [LangChain Google integration used by this project](https://docs.langchain.com/oss/javascript/integrations/chat/google_generative_ai)
+- [LangChain Google integration used by this project](https://docs.langchain.com/oss/javascript/integrations/chat/google)
 
-This README describes the existing implementation rather than upgrading it to newer API examples.
+The framework upgrade was verified against the official LangChain docs/reference MCP servers and npm's latest published package versions. The installed versions are LangChain 1.5.16, LangGraph 1.4.21, Core 1.2.17, Google 0.2.10, OpenAI integration 1.6.2, and Zod 4.6.5. The lockfile records exact resolved dependencies.
+
+The planner schema enforces at most five steps and 150 characters per step. The execution schema requires exactly one note per step and limits each note to 300 characters. Both model nodes forward the graph's runnable config for callbacks, tracing, and cancellation. A shared `ChatGoogle` client preserves `GEMINI_API_KEY` and `GEMINI_MODEL` and uses Google's recommended default generation parameters.
+
+`MemorySaver` remains an in-memory development checkpointer. No durable database persistence or token streaming is enabled.

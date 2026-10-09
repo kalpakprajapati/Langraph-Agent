@@ -1,6 +1,6 @@
-import { State } from "../types";
+import type { State, TaskNode } from "../types";
 
-export async function finalizeNode(state: State): Promise<Partial<State>> {
+export const finalizeNode: TaskNode = async (state) => {
   const approved = state.approved ?? false;
   const results = state.results ?? [];
   const steps = state.steps ?? [];
@@ -37,4 +37,4 @@ export async function finalizeNode(state: State): Promise<Partial<State>> {
     steps,
     results,
   };
-}
+};

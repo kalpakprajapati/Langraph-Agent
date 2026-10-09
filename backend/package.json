@@ -4,8 +4,9 @@
   "description": "",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx watch src/index.ts"
+    "test": "tsx --test src/graph/graph.test.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -15,16 +16,16 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@langchain/core": "^1.0.2",
-    "@langchain/google-genai": "^2.3.2",
-    "@langchain/langgraph": "^1.0.1",
-    "@langchain/openai": "^1.0.0",
+    "@langchain/core": "^1.2.17",
+    "@langchain/google": "^0.2.10",
+    "@langchain/langgraph": "^1.4.21",
+    "@langchain/openai": "^1.6.2",
     "@types/express": "^4.17.25",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "langchain": "^1.0.2",
+    "langchain": "^1.5.16",
     "openai": "^6.8.1",
-    "zod": "^4.1.12"
+    "zod": "^4.6.5"
   },
   "keywords": [],
   "author": "",
