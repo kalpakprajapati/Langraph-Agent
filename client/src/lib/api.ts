@@ -1,46 +1,43 @@
+import { consumeAgentStream } from "./event-stream";
+import type { AgentStreamEvent } from "./types";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
-export async function startAgent(input: string) {
-  const res = await fetch(`${BASE}/agent`, {
+async function streamAgent(
+  path: string,
+  body: unknown,
+  onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal
+) {
+  const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ input }),
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal,
   });
-
-  if (!res.ok) throw new Error(`Start agent failed: ${res.status}`);
-
-  return res.json() as Promise<{
-    status: "ok" | "error";
-    data?:
-      | { kind: "final"; final: any }
-      | {
-          kind: "needs_approval";
-          interrupt: {
-            threadId: string;
-            steps: string[];
-            prompt: string;
-          };
-        };
-    error?: string;
-  }>;
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.error ?? `Agent request failed: ${res.status}`);
+  }
+  if (!res.body || !res.headers.get("content-type")?.includes("text/event-stream")) {
+    throw new Error("The backend did not return an event stream");
+  }
+  await consumeAgentStream(res.body, onEvent);
 }
 
-export async function approveAgent(threadId: string, approve: boolean) {
-  const res = await fetch(`${BASE}/agent/approve`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ threadId, approve }),
-  });
+export function startAgent(
+  input: string,
+  onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal
+) {
+  return streamAgent("/agent", { input }, onEvent, signal);
+}
 
-  if (!res.ok) throw new Error(`Approve step failed: ${res.status}`);
-
-  return res.json() as Promise<{
-    status: "ok" | "error";
-    data?: { kind: "final"; final: any };
-    error?: string;
-  }>;
+export function approveAgent(
+  threadId: string,
+  approve: boolean,
+  onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal
+) {
+  return streamAgent("/agent/approve", { threadId, approve }, onEvent, signal);
 }

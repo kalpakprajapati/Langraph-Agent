@@ -4,6 +4,7 @@
 
 import {
   Annotation,
+  INTERRUPT,
   Command,
   END,
   MemorySaver,
@@ -16,6 +17,10 @@ import { approveNode } from "./nodes/03_approve";
 import { executeNode } from "./nodes/04_execute";
 import { finalizeNode } from "./nodes/05_finalize";
 import { makeInitialState, State } from "./types";
+import * as fs from "node:fs/promises";
+import { z } from "zod";
+import { PreviewSchema, type AgentStreamEvent } from "./streaming";
+
 
 const StateAnn = Annotation.Root({
   input: Annotation<string>,
@@ -52,6 +57,19 @@ builder.addEdge("finalize", END);
 const checkPointer = new MemorySaver();
 const graph = builder.compile({
   checkpointer: checkPointer,
+});
+
+
+async function exportGraphImage(): Promise<void> {
+  const drawableGraph = await graph.getGraphAsync();
+  const image = await drawableGraph.drawMermaidPng();
+  const imageBuffer = new Uint8Array(await image.arrayBuffer());
+
+  await fs.writeFile("graph.png", imageBuffer);
+}
+
+void exportGraphImage().catch((error: unknown) => {
+  console.error("Failed to export graph.png:", error);
 });
 
 function createThreadId() {
@@ -103,4 +121,63 @@ export async function resumeAgentRun(args: {
   )) as State;
 
   return finalState;
+}
+
+/** Custom previews are display-only; updates and checkpoints stay authoritative. */
+async function* streamRun(
+  input: Parameters<typeof graph.invoke>[0],
+  threadId: string,
+  signal?: AbortSignal
+): AsyncGenerator<AgentStreamEvent> {
+  const config = { configurable: { thread_id: threadId }, signal };
+  yield { type: "started", threadId };
+
+  const stream = await graph.stream(input, {
+    ...config,
+    streamMode: ["custom", "updates"],
+  });
+  for await (const [mode, data] of stream) {
+    if (mode === "custom") {
+      const preview = PreviewSchema.safeParse(data);
+      if (preview.success) yield preview.data;
+    } else if (mode === "updates" && data && typeof data === "object") {
+      for (const node of Object.keys(data)) {
+        if (node !== INTERRUPT) yield { type: "progress", node };
+      }
+    }
+  }
+
+  signal?.throwIfAborted();
+  const snapshot = await graph.getState(config);
+  const interrupts = snapshot.tasks.flatMap((task) => task.interrupts ?? []);
+  if (interrupts.length) {
+    const payload = z.object({ steps: z.array(z.string()) }).parse(interrupts[0].value);
+    yield {
+      type: "needs_approval",
+      threadId,
+      steps: payload.steps,
+      prompt: "Approve the generated plan to continue, or reject to cancel.",
+    };
+  } else {
+    const final = snapshot.values as State;
+    if (final.status !== "done" && final.status !== "cancelled") {
+      throw new Error("The graph ended without a final result");
+    }
+    yield { type: "final", final };
+  }
+}
+
+export function streamAgentRun(input: string, signal?: AbortSignal) {
+  return streamRun(makeInitialState(input), createThreadId(), signal);
+}
+
+export async function* streamResumeAgentRun(
+  args: { threadId: string; approve: boolean },
+  signal?: AbortSignal
+): AsyncGenerator<AgentStreamEvent> {
+  const snapshot = await graph.getState({ configurable: { thread_id: args.threadId } });
+  if (!snapshot.tasks.some((task) => task.interrupts?.length)) {
+    throw new Error("No pending approval found for this thread");
+  }
+  yield* streamRun(new Command({ resume: { approve: args.approve } }), args.threadId, signal);
 }

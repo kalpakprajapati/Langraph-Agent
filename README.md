@@ -1,4 +1,4 @@
-﻿# LangGraph Task Agent
+# LangGraph Task Agent
 
 A TypeScript learning project that combines a Next.js UI, an Express API, and a LangGraph workflow. Enter a task, review a Gemini-generated plan, and approve or reject it. Approved plans receive a short generated note for each step.
 
@@ -180,6 +180,40 @@ Nodes return partial updates. Fields not included in an update retain their exis
 
 The Zod `StateSchema` in `types.ts` supplies the inferred TypeScript `State` type. The graph uses `StateAnn` from `Annotation.Root`; the whole-state Zod schema is not explicitly parsed by the start helper. Request bodies and model output have their own schemas.
 
+
+## Live streaming
+
+The frontend sends `Accept: text/event-stream` on both POST endpoints. Express streams SSE frames while the graph runs. Clients that omit that header still receive the JSON API responses shown below.
+
+The plan and execution nodes keep their structured-output schemas and two-model-call workflow. Gemini streams JSON text; callbacks decode partial arrays into display-only previews through LangGraph's `custom` stream mode. Completed model output is still validated before being committed to graph state. Approval controls appear only after the validated plan reaches the interrupt.
+
+Each SSE frame contains a JSON event in its `data` field:
+
+```text
+data: {"type":"preview","node":"plan","items":["Review JavaScript fund"]}
+
+data: {"type":"preview","node":"plan","items":["Review JavaScript fundamentals."]}
+
+```
+
+| Event | Payload | Purpose |
+| --- | --- | --- |
+| `started` | `threadId` | Identify the run. |
+| `preview` | `node`, `items` | Replace the current plan/notes preview with the latest partial array. |
+| `progress` | `node` | Indicate a completed graph node. |
+| `needs_approval` | `threadId`, `steps`, `prompt` | Display the validated plan and approval buttons. |
+| `final` | `final` | Replace the preview with the completed graph result. |
+| `error` | `message` | Report a failure after streaming headers have been sent. |
+
+Preview arrays are snapshots, not text deltas: the browser replaces the relevant array rather than appending it. Raw JSON syntax is never displayed. Model chunks may contain several tokens, so update frequency depends on the provider.
+
+The first stream closes at the approval pause. Clicking Approve opens a new stream for the same thread and progressively fills the result notes. Rejecting produces a cancelled final result without an execution model call.
+
+The fetch-based SSE reader buffers incomplete frames and decodes UTF-8 incrementally. It detects truncated connections and explicit error events. Closing the connection or unmounting the page aborts the in-progress graph/model request. Heartbeat comments keep idle connections active; deployment proxies must permit unbuffered streaming.
+
+Malformed requests receive HTTP 400 JSON errors before a stream opens. Once SSE headers have been sent, failures are sent as `error` events rather than changing the HTTP status.
+
+
 ## HTTP API
 
 ### Start a run
@@ -202,7 +236,7 @@ A planned task returns an approval request. Example response (generated text var
     "interrupt": {
       "threadId": "t_example",
       "steps": ["Review core concepts.", "Practice coding questions."],
-      "prompt": "Approve the generated plan to execute or reject to calcel"
+      "prompt": "Approve the generated plan to continue, or reject to cancel."
     }
   }
 }
@@ -245,7 +279,7 @@ Use the thread ID from the start response. Set `approve` to `false` to reject. T
 }
 ```
 
-Malformed request bodies return HTTP `400`. Caught workflow/model failures return HTTP `500`. Error bodies use `{ "status": "error", "error": "..." }`; current messages are generic.
+For JSON clients, malformed request bodies return HTTP `400` and caught workflow/model failures return HTTP `500`. Error bodies use `{ "status": "error", "error": "..." }`. Streaming failures use the SSE error event described above.
 
 ## Development checks
 
@@ -263,14 +297,13 @@ cd client
 npm run build
 ```
 
-The backend's `npm test` script is currently a placeholder that exits with an error. There is no automated test suite or backend production start/build script defined in its package manifest.
+Run the streaming regression tests from the backend directory with `npm test`. They use mocked Gemini chunks and a local HTTP server to cover previews, approval/resume, rejection, concurrent runs, validation, JSON compatibility, fragmented SSE/UTF-8, failures, and disconnect cancellation. No real model calls are made. A backend production start/build script is not defined.
 
 ## Current limitations
 
 - Checkpoints use process memory. Backend restarts lose runs, and separate backend instances do not share them.
 - The UI keeps its pending thread ID in React state; reloading the page loses the reference to the pending run.
-- The API currently supports one approval pause. The resume helper assumes its next result is final; more interrupts would require extending that response handling.
-- The UI waits for completed API responses; it does not stream tokens or node progress.
+- The graph currently contains one approval node. The streaming runner checks for pending interrupts after both start and resume; the legacy JSON resume helper still assumes a final result.
 - Execution produces model-generated notes. It has no tool execution, external task actions, or chat-history loop.
 - The note count is requested in the prompt but not enforced to equal the step count by the schema. Pairing uses the shorter array, so a result can contain fewer notes than steps.
 - Authentication and per-user authorization of thread IDs are not implemented.
@@ -279,6 +312,7 @@ The backend's `npm test` script is currently a placeholder that exits with an er
 
 - [LangGraph Graph API](https://docs.langchain.com/oss/javascript/langgraph/graph-api)
 - [LangGraph interrupts](https://docs.langchain.com/oss/javascript/langgraph/interrupts)
+- [LangGraph streaming](https://docs.langchain.com/oss/javascript/langgraph/streaming)
 - [LangGraph persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence)
 - [LangChain Google integration used by this project](https://docs.langchain.com/oss/javascript/integrations/chat/google_generative_ai)
 

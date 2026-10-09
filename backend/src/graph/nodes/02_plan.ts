@@ -1,3 +1,5 @@
+import type { LangGraphRunnableConfig } from "@langchain/langgraph";
+import { arrayPreviewCallbacks } from "../streaming";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { z } from "zod";
 import { env } from "../../utils/env";
@@ -18,6 +20,7 @@ function makeModel() {
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     temperature: 0.2,
+    streaming: true,
   });
 }
 
@@ -39,12 +42,12 @@ function takeFirstN(arr: string[], n = 5): string[] {
   return Array.isArray(arr) ? arr.slice(0, Math.max(0, n)) : [];
 }
 
-export async function PlanNode(state: State): Promise<Partial<State>> {
+export async function PlanNode(state: State, config: LangGraphRunnableConfig): Promise<Partial<State>> {
   if (state.status === "cancelled") return {};
 
   const model = makeModel();
 
-  const structured = model.withStructuredOutput(PlanSchema);
+  const structured = model.withStructuredOutput(PlanSchema, { method: "jsonSchema" });
 
   const plan = await structured.invoke([
     {
@@ -56,7 +59,7 @@ export async function PlanNode(state: State): Promise<Partial<State>> {
       role: "human",
       content: userPrompt(state.input),
     },
-  ]);
+  ], { ...config, callbacks: arrayPreviewCallbacks(config, "plan", "steps", 5) });
 
   const steps = takeFirstN(plan.steps, 5);
 
